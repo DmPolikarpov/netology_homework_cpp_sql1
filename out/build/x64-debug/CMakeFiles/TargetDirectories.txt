@@ -1,0 +1,3 @@
+C:/Users/dpoli/source/repos/netology_homework_cpp_sql1/out/build/x64-debug/CMakeFiles/netology_homework_cpp_sql1.dir
+C:/Users/dpoli/source/repos/netology_homework_cpp_sql1/out/build/x64-debug/CMakeFiles/edit_cache.dir
+C:/Users/dpoli/source/repos/netology_homework_cpp_sql1/out/build/x64-debug/CMakeFiles/rebuild_cache.dir
