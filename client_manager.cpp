@@ -4,19 +4,11 @@
 // constructor with db connection
 ClientManager::ClientManager(const std::string& connection_string)
 {
-    try
-    {
-        conn = std::make_shared<pqxx::connection>(connection_string);
-        if (!conn->is_open()) {
-            throw std::runtime_error("Cannot connect to database");
-        }
-        std::cout << "Connected!" << std::endl;
+    conn = std::make_shared<pqxx::connection>(connection_string);
+    if (!conn->is_open()) {
+        throw std::runtime_error("Cannot connect to database");
     }
-    catch (const std::exception& e)
-    {
-        std::cerr << "Connection error: " << e.what() << std::endl;
-        throw;
-    }
+    std::cout << "Connected!" << std::endl;
 }
 
 // create client table
@@ -39,8 +31,7 @@ void ClientManager::createClientsTable()
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Some error of client table creating happened: " << e.what() << std::endl;
-        throw;
+        throw std::runtime_error(std::string("Some error of client table creating happened: ") + e.what() );
     }
 }
 
@@ -64,8 +55,7 @@ void ClientManager::createPhonesTable()
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Some error of client_phones table creating happened: " << e.what() << std::endl;
-        throw;
+        throw std::runtime_error(std::string("Some error of client_phones table creating happened: ") + e.what());
     }
 }
 
@@ -79,40 +69,31 @@ void ClientManager::createDatabaseStructure()
 // add a new client
 int ClientManager::addClient(const std::string& first_name, const std::string& last_name, const std::string& email)
 {
-    try
+    pqxx::work txn(*conn);
+
+    // check if a client with such email exists
+    pqxx::result r = txn.exec_params(
+        "SELECT id FROM clients WHERE email = $1",
+        email
+    );
+
+    if (!r.empty())
     {
-        pqxx::work txn(*conn);
-
-        // check if a client with such email exists
-        pqxx::result r = txn.exec_params(
-            "SELECT id FROM clients WHERE email = $1",
-            email
-        );
-
-        if (!r.empty())
-        {
-            throw std::runtime_error("A client with email " + email + " already exists!");
-        }
-
-        // add a new client
-        r = txn.exec_params(
-            "INSERT INTO clients (first_name, last_name, email) "
-            "VALUES ($1, $2, $3) RETURNING id",
-            first_name, last_name, email
-        );
-
-        int client_id = r[0][0].as<int>();
-        txn.commit();
-
-        std::cout << "Client added!" << std::endl;
-        return client_id;
-
+        throw std::runtime_error("A client with email " + email + " already exists!");
     }
-    catch (const std::exception& e)
-    {
-        std::cerr << "Creating client error: " << e.what() << std::endl;
-        throw;
-    }
+
+    // add a new client
+    r = txn.exec_params(
+        "INSERT INTO clients (first_name, last_name, email) "
+        "VALUES ($1, $2, $3) RETURNING id",
+        first_name, last_name, email
+    );
+
+    int client_id = r[0][0].as<int>();
+    txn.commit();
+
+    std::cout << "Client added!" << std::endl;
+    return client_id;
 }
 
 // add phone
@@ -123,37 +104,29 @@ void ClientManager::addPhone(int client_id, const std::string& phone_number)
         throw std::runtime_error("Client with ID " + std::to_string(client_id) + " does not exist");
     }
 
-    try
+    pqxx::work txn(*conn);
+
+    // check if the client already have such phone number
+    pqxx::result r = txn.exec_params(
+        "SELECT id FROM client_phones WHERE client_id = $1 AND phone_number = $2",
+        client_id, phone_number
+    );
+
+    if (!r.empty())
     {
-        pqxx::work txn(*conn);
-
-        // check if the client already have such phone number
-        pqxx::result r = txn.exec_params(
-            "SELECT id FROM client_phones WHERE client_id = $1 AND phone_number = $2",
-            client_id, phone_number
-        );
-
-        if (!r.empty())
-        {
-            throw std::runtime_error("The client already have such phone number");
-        }
-
-        // add a new phone number
-        txn.exec_params(
-            "INSERT INTO client_phones (client_id, phone_number) "
-            "VALUES ($1, $2)",
-            client_id, phone_number
-        );
-
-        txn.commit();
-        std::cout << "Phone number is added" << std::endl;
-
+        throw std::runtime_error("The client already have such phone number");
     }
-    catch (const std::exception& e)
-    {
-        std::cerr << "Some error happened: " << e.what() << std::endl;
-        throw;
-    }
+
+    // add a new phone number
+    txn.exec_params(
+        "INSERT INTO client_phones (client_id, phone_number) "
+        "VALUES ($1, $2)",
+        client_id, phone_number
+    );
+
+    txn.commit();
+    std::cout << "Phone number is added" << std::endl;
+
 }
 
 // get client phones
@@ -181,7 +154,7 @@ std::vector<PhoneNumber> ClientManager::getClientPhones(int client_id)
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Error of phone receiving: " << e.what() << std::endl;
+        throw std::runtime_error(std::string("Error of phone receiving: ") + e.what());
     }
 
     return phones;
@@ -195,66 +168,57 @@ void ClientManager::updateClient(int client_id, const std::string& new_first_nam
         throw std::runtime_error("Client with ID " + std::to_string(client_id) + " does not exist");
     }
 
-    try
+    pqxx::work txn(*conn);
+
+    std::string query = "UPDATE clients SET ";
+    std::vector<std::string> updates;
+    std::vector<std::string> params;
+    int param_count = 1;
+
+    // first name
+    if (!new_first_name.empty())
     {
-        pqxx::work txn(*conn);
-
-        std::string query = "UPDATE clients SET ";
-        std::vector<std::string> updates;
-        std::vector<std::string> params;
-        int param_count = 1;
-
-        // first name
-        if (!new_first_name.empty())
-        {
-            updates.push_back("first_name = $" + std::to_string(param_count++));
-            params.push_back(new_first_name);
-        }
-        // last name
-        if (!new_last_name.empty())
-        {
-            updates.push_back("last_name = $" + std::to_string(param_count++));
-            params.push_back(new_last_name);
-        }
-        // new email
-        if (!new_email.empty())
-        {
-            // check if there is client with such email
-            pqxx::result r = txn.exec_params(
-                "SELECT id FROM clients WHERE email = $1 AND id != $2",
-                new_email, client_id
-            );
-
-            if (!r.empty())
-            {
-                throw std::runtime_error("Email " + new_email + " is already used by other client");
-            }
-
-            updates.push_back("email = $" + std::to_string(param_count++));
-            params.push_back(new_email);
-        }
-
-        if (updates.empty())
-        {
-            std::cout << "data is the same" << std::endl;
-            return;
-        }
-
-        query += pqxx::separated_list(", ", updates.begin(), updates.end());
-        query += " WHERE id = $" + std::to_string(param_count);
-        params.push_back(std::to_string(client_id));
-
-        txn.exec_params(query, pqxx::prepare::make_dynamic_params(params));
-        txn.commit();
-
-        std::cout << "Data updated" << std::endl;
-
+        updates.push_back("first_name = $" + std::to_string(param_count++));
+        params.push_back(new_first_name);
     }
-    catch (const std::exception& e)
+    // last name
+    if (!new_last_name.empty())
     {
-        std::cerr << "Error of data updating: " << e.what() << std::endl;
-        throw;
+        updates.push_back("last_name = $" + std::to_string(param_count++));
+        params.push_back(new_last_name);
     }
+    // new email
+    if (!new_email.empty())
+    {
+        // check if there is client with such email
+        pqxx::result r = txn.exec_params(
+            "SELECT id FROM clients WHERE email = $1 AND id != $2",
+            new_email, client_id
+        );
+
+        if (!r.empty())
+        {
+            throw std::runtime_error("Email " + new_email + " is already used by other client");
+        }
+
+        updates.push_back("email = $" + std::to_string(param_count++));
+        params.push_back(new_email);
+    }
+
+    if (updates.empty())
+    {
+        std::cout << "data is the same" << std::endl;
+        return;
+    }
+
+    query += pqxx::separated_list(", ", updates.begin(), updates.end());
+    query += " WHERE id = $" + std::to_string(param_count);
+    params.push_back(std::to_string(client_id));
+
+    txn.exec_params(query, pqxx::prepare::make_dynamic_params(params));
+    txn.commit();
+
+    std::cout << "Data updated" << std::endl;
 }
 
 // remove phone
@@ -281,8 +245,7 @@ void ClientManager::deletePhone(int phone_id)
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Remove phone error: " << e.what() << std::endl;
-        throw;
+        throw std::runtime_error(std::string("Remove phone error: ") + e.what());
     }
 }
 
@@ -294,24 +257,15 @@ void ClientManager::deleteClient(int client_id)
         throw std::runtime_error("Client with ID " + std::to_string(client_id) + " does not exist");
     }
 
-    try
-    {
-        pqxx::work txn(*conn);
+    pqxx::work txn(*conn);
 
-        pqxx::result r = txn.exec_params(
-            "DELETE FROM clients WHERE id = $1",
-            client_id
-        );
+    pqxx::result r = txn.exec_params(
+        "DELETE FROM clients WHERE id = $1",
+        client_id
+    );
 
-        txn.commit();
-        std::cout << "Client and his/her phones was removed" << std::endl;
-
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "Remove client error: " << e.what() << std::endl;
-        throw;
-    }
+    txn.commit();
+    std::cout << "Client and his/her phones was removed" << std::endl;
 }
 
 // find clients
@@ -352,7 +306,7 @@ std::vector<Client> ClientManager::findClients(const std::string& search_term)
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Search clients error: " << e.what() << std::endl;
+        throw std::runtime_error(std::string("Search clients error: ") + e.what());
     }
 
     return clients;
@@ -384,7 +338,7 @@ Client ClientManager::getClientById(int client_id)
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Get client by id error: " << e.what() << std::endl;
+        throw std::runtime_error(std::string("Get client by id error: ") + e.what());
     }
 
     return client;
@@ -418,7 +372,7 @@ std::vector<Client> ClientManager::getAllClients()
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Some error happened: " << e.what() << std::endl;
+        throw std::runtime_error(std::string("Some error happened: ") + e.what());
     }
 
     return clients;
@@ -441,7 +395,6 @@ bool ClientManager::clientExists(int client_id)
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Some erorr happened: " << e.what() << std::endl;
-        return false;
+        throw std::runtime_error(std::string("Some error happened: ") + e.what());
     }
 }
